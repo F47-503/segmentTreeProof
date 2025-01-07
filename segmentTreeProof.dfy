@@ -361,26 +361,17 @@ class SegmentTreeWrapper<T(!new)>
         boundaries(tree) == (0, elems.Length - 1)
     }
 
-    method buildTreeInner()
-        modifies this
-        requires monoid.validMonoid()
-        requires elems.Length > 0
-        ensures validSubtree(tree)
-        ensures fullTree()    
-    {
-        var res := buildTree(elems, 0, elems.Length - 1, monoid);
-        tree := res;
-    }
-
     constructor(arr: array<T>, m: Monoid.AbstractMonoid<T>) 
         requires m.validMonoid()
         requires arr.Length > 0
         ensures monoid.validMonoid()
         ensures elems.Length == arr.Length == elems.Length
+        ensures validSubtree(tree)
+        ensures fullTree()
     {
         elems := arr;
         monoid := m;
-        tree := Leaf(0, m.identity());
+        tree := buildTree(arr, 0, arr.Length - 1, m);
     }
 
     function method innerQuery(subTree:SegmentTree<T>, l: int, r: int): (res: T)
@@ -457,5 +448,38 @@ method Main() {
     print addMonoidInstance.identity(), " ";
     print minMonoidInstance.op(3, 13), " ";
     print minMonoidInstance.identity(), " ";
-    assert addMonoidInstance.validMonoid();    
+    assert addMonoidInstance.validMonoid();
+    print "Our testing array for segment tree: 3, 1, 4, 1, 5, 9, 2";
+    var arr := new int[7];
+    arr[0] := 3;
+    arr[1] := 1;
+    arr[2] := 4;
+    arr[3] := 1;
+    arr[4] := 5;
+    arr[5] := 9;
+    arr[6] := 2;
+    var minArr := new Monoid.BoundedInt[7];
+    minArr[0] := 3;
+    minArr[1] := 1;
+    minArr[2] := 4;
+    minArr[3] := 1;
+    minArr[4] := 5;
+    minArr[5] := 9;
+    minArr[6] := 2;
+    var segmentTreeAdd := new SegmentTreeWrapper<int>(arr, addMonoidInstance);  
+    assert segmentTreeAdd.elems.Length == 7;
+    var addRes24 := segmentTreeAdd.query(2, 4);
+    print "add result on 2-4: ", addRes24, "\n";
+    segmentTreeAdd.change(3, 8);
+    var newAddRes24 := segmentTreeAdd.query(2, 4);
+    print "add result on 2-4 after change: ", newAddRes24, "\n";
+    assert arr[3] == 1;
+    var segmentTreeMin := new SegmentTreeWrapper<Monoid.BoundedInt>(minArr, minMonoidInstance);  
+    assert segmentTreeMin.elems.Length == 7;
+    var minRes35 := segmentTreeMin.query(3, 5);
+    print "min result on 3-5: ", minRes35, "\n";
+    segmentTreeMin.change(3, 8);
+    var newMinRes35 := segmentTreeMin.query(3, 5);
+    print "min result on 3-5 after change: ", newMinRes35, "\n";
+    assert minArr[3] == 1;
 }
