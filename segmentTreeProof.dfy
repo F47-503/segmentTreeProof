@@ -68,28 +68,6 @@ module Monoid {
         constructor() {
         }
     }
-    trait Transform<U(!new), T(!new)> {
-        var monoid: AbstractMonoid<T>
-        function method identity(): U
-        function method apply(elem: U, res: T): T
-        function method compose(elem1: U, elem2: U): U
-        predicate hasIdentity() {
-            forall x: T :: apply(identity(), x) == x
-        } 
-        predicate isComposeAssociative() {
-            forall x: U, y: U, z: T :: apply(compose(x, y), z) == apply(x, apply(y, z))
-        }
-        predicate isDustrubutive() 
-            reads this
-        {
-            forall x: U, y: T, z: T :: apply(x, monoid.op(y, z)) == monoid.op(apply(x, y), apply(x, z))
-        }
-        predicate validTransform() 
-            reads this
-        {
-            isComposeAssociative() && isDustrubutive() && hasIdentity()
-        }
-    }
 }
 
 datatype SegmentTree<T> =
@@ -250,41 +228,6 @@ lemma validTreeValuesRange<T(!new)>(tree: SegmentTree<T>, arr: array<T>, monoid:
     }
 }
 
-lemma equalArraysEqualQueries<T(!new)>(arr1: array<T>, arr2: array<T>, l: int, r: int, monoid: Monoid.AbstractMonoid<T>) 
-    requires arr1.Length == arr2.Length
-    requires forall i :: 0 <= i < arr1.Length ==> arr1[i] == arr2[i]
-    requires monoid.validMonoid()
-    requires 0 <= l <= arr1.Length && 0 <= r < arr2.Length
-    ensures straightQuery(arr1, l, r, monoid) == straightQuery(arr2, l, r, monoid)
-    decreases r - l
-{
-    if (l > r) {
-        return;
-    }
-    assert arr1[l] == arr2[l];
-    equalArraysEqualQueries(arr1, arr2, l + 1, r, monoid);
-}
-
-lemma equalArraysEqualTrees<T(!new)>(tree: SegmentTree<T>, arr1: array<T>, arr2: array<T>, monoid: Monoid.AbstractMonoid<T>) 
-    requires arr1.Length == arr2.Length
-    requires forall i :: 0 <= i < arr1.Length ==> arr1[i] == arr2[i]
-    requires monoid.validMonoid()
-    requires 0 <= boundaries(tree).0 <= boundaries(tree).1 < arr1.Length
-    requires validTree(tree)
-    requires validTreeValues(tree, arr1, monoid)
-    ensures validTreeValues(tree, arr2, monoid)
-    decreases tree
-{
-    var (l, r) := boundaries(tree);
-    match tree {
-        case Leaf(l, val) => assert arr2[l] == val;
-        case Node(l, m, r, left, right, val) => 
-            equalArraysEqualTrees(left, arr1, arr2, monoid);
-            equalArraysEqualTrees(right, arr1, arr2, monoid);
-            equalArraysEqualQueries(arr1, arr2, l, r, monoid);
-    }
-}
-
 lemma splitSegmentQuery<T(!new)>(arr: array<T>, l: int, m: int, r: int, l1: int, r1: int, monoid: Monoid.AbstractMonoid<T>) 
     requires monoid.validMonoid()
     requires 0 <= l <= m <= r < arr.Length
@@ -308,35 +251,102 @@ lemma splitSegmentQuery<T(!new)>(arr: array<T>, l: int, m: int, r: int, l1: int,
     associativeQuery(arr, maxInt(l1, l), m, minInt(r1, r), monoid);
 }
 
-predicate equalStructures<T, U>(tree1: SegmentTree<T>, tree2: SegmentTree<U>) 
+lemma almostEqualQueries<T(!new)>(arr1: array<T>, arr2: array<T>, l: int, r: int, pos: int, monoid: Monoid.AbstractMonoid<T>) 
+    requires arr1.Length == arr2.Length
+    requires monoid.validMonoid()
+    requires forall i :: 0 <= i < arr1.Length && i != pos ==> arr1[i] == arr2[i]
+    requires 0 <= l <= arr1.Length
+    requires 0 <= r < arr1.Length
+    requires pos < l || pos > r
+    ensures straightQuery(arr1, l, r, monoid) == straightQuery(arr2, l, r, monoid)
+    decreases r - l
 {
-    validTree(tree1) && 
-    validTree(tree2) &&
-    boundaries(tree1) == boundaries(tree2) &&
-    match tree1 {
-        case Node(l1, m1, r1, left1, right1, val1) => match tree2 {
-            case Node(l2, m2, r2, left2, right2, val2) => equalStructures(left1, left2) && equalStructures(right1, right2)
-            case Leaf(_,_) => false
-        }
-        case Leaf(x1, val1) => match tree2 {
-            case Node(_, _, _, _, _, _) => false
-            case Leaf(x2, val2) => x1 == x2
-        }
+    if (r < l) {
+        return;
     }
+    almostEqualQueries(arr1, arr2, l + 1, r, pos, monoid);
+}
+
+lemma almostEqualTrees<T(!new)>(tree: SegmentTree<T>, arr1: array<T>, arr2: array<T>, pos: int, monoid: Monoid.AbstractMonoid<T>) 
+    requires arr1.Length == arr2.Length
+    requires validTree(tree)
+    requires monoid.validMonoid()
+    requires forall i :: 0 <= i < arr1.Length && pos != i ==> arr1[i] == arr2[i]
+    requires 0 <= boundaries(tree).0 <= boundaries(tree).1 < arr1.Length
+    requires validTreeValues(tree, arr1, monoid)
+    requires pos > boundaries(tree).1 || pos < boundaries(tree).0
+    ensures validTreeValues(tree, arr2, monoid)
+{
+    match tree {
+        case Leaf(x, val) => assert arr1[x] == arr2[x];
+        case Node(l, m, r, left, right, val) => 
+            almostEqualTrees(left, arr1, arr2, pos, monoid);
+            almostEqualTrees(right, arr1, arr2, pos, monoid);
+            almostEqualQueries(arr1, arr2, l, r, pos, monoid);
+            assert validTreeValues(tree, arr2, monoid);
+    }
+}
+
+function method rebuildTree<T(!new)>(tree: SegmentTree<T>, arr1: array<T>, arr2: array<T>, pos: int, monoid: Monoid.AbstractMonoid<T>): (res: SegmentTree<T>)
+    reads arr2
+    reads arr1
+    requires arr1.Length == arr2.Length
+    requires validTree(tree)
+    requires monoid.validMonoid()
+    requires forall i :: 0 <= i < arr1.Length && i != pos ==> arr1[i] == arr2[i]
+    requires 0 <= boundaries(tree).0 <= boundaries(tree).1 < arr1.Length
+    requires validTreeValues(tree, arr1, monoid)
+    ensures boundaries(res) == boundaries(tree)
+    ensures validTree(res)
+    ensures validTreeValues(res, arr2, monoid)
+{
+    if (pos < boundaries(tree).0 || pos > boundaries(tree).1) 
+    then
+        almostEqualTrees(tree, arr1, arr2, pos, monoid);
+        tree
+    else
+        match tree {
+            case Leaf(x, val) => assert pos == x; Leaf(x, arr2[x])
+            case Node(l, m, r, left, right, val) => 
+                if (m < pos) 
+                then
+                    almostEqualTrees(left, arr1, arr2, pos, monoid);
+                    associativeQuery(arr2, l, m, r, monoid);
+                    mergeTrees(left, rebuildTree(right, arr1, arr2, pos, monoid), monoid.op)
+                else
+                    almostEqualTrees(right, arr1, arr2, pos, monoid);
+                    associativeQuery(arr2, l, m, r, monoid);
+                    mergeTrees(rebuildTree(left, arr1, arr2, pos, monoid), right, monoid.op)
+        }
+}
+
+method singleChange<T>(arr: array<T>, pos: int, elem: T) returns (res: array<T>)
+    requires 0 <= pos < arr.Length 
+    ensures arr.Length == res.Length
+    ensures res[pos] == elem
+    ensures forall i :: 0 <= i < arr.Length && (i != pos) ==> arr[i] == res[i]
+{
+    var newArr := new T[arr.Length](_ => elem);
+    var i := 0;
+    while i < arr.Length
+        invariant 0 <= i <= arr.Length
+        invariant arr.Length == newArr.Length
+        invariant elem == newArr[pos]
+        invariant forall j :: 0 <= j < i && (j != pos) ==> arr[j] == newArr[j]
+    {
+        if (i != pos) {
+            newArr[i] := arr[i];
+        }
+        i := i + 1;
+    }
+    return newArr;
 }
 
 class SegmentTreeWrapper<T(!new)>
 {
-    var elemsInit: array<T>
-    ghost var elems: array<T>
+    var elems: array<T>
     var tree: SegmentTree<T>
     var monoid: Monoid.AbstractMonoid<T>
-
-    predicate validStructure() 
-        reads this
-    {
-        elems.Length == elemsInit.Length
-    }
 
     predicate validSubtree(subTree: SegmentTree<T>)
         reads this
@@ -353,26 +363,22 @@ class SegmentTreeWrapper<T(!new)>
 
     method buildTreeInner()
         modifies this
-        requires validStructure()
         requires monoid.validMonoid()
         requires elems.Length > 0
-        requires forall i :: 0 <= i < elems.Length ==> elems[i] == elemsInit[i]
         ensures validSubtree(tree)
         ensures fullTree()    
     {
-        var res := buildTree(elemsInit, 0, elemsInit.Length - 1, monoid);
+        var res := buildTree(elems, 0, elems.Length - 1, monoid);
         tree := res;
-        equalArraysEqualTrees(tree, elemsInit, elems, monoid);
     }
 
     constructor(arr: array<T>, m: Monoid.AbstractMonoid<T>) 
         requires m.validMonoid()
         requires arr.Length > 0
         ensures monoid.validMonoid()
-        ensures elems.Length == arr.Length == elemsInit.Length
+        ensures elems.Length == arr.Length == elems.Length
     {
         elems := arr;
-        elemsInit := arr;
         monoid := m;
         tree := Leaf(0, m.identity());
     }
@@ -417,6 +423,27 @@ class SegmentTreeWrapper<T(!new)>
         }
         assert boundaries(tree) == (0, elems.Length - 1);
         return innerQuery(tree, l, r);
+    }
+
+    method change(pos: int, elem: T)
+        modifies this
+        requires monoid.validMonoid()
+        requires validTree(tree)
+        requires validSubtree(tree)
+        requires fullTree()
+        requires 0 <= pos < elems.Length
+        ensures monoid.validMonoid()
+        ensures validTree(tree)
+        ensures validSubtree(tree)
+        ensures fullTree()
+        ensures elems.Length == old(elems.Length) 
+        ensures elems[pos] == elem
+        ensures forall i :: 0 < i < elems.Length && (i != pos) ==> elems[i] == old(elems[i])
+    {
+        var newElems := singleChange(elems, pos, elem);
+        var newTree := rebuildTree(tree, elems, newElems, pos, monoid);
+        elems := newElems;
+        tree := newTree;       
     }
     
 }
