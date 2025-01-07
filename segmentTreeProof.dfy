@@ -1,53 +1,50 @@
+// this module supplies us with interface for monoid and some potential instances of monoids
 module Monoid {
     trait AbstractMonoid<T(!new)> {
+        // operation in monoid
         function method op(x: T, y: T): T
+        // monoid neutral element
         function method identity(): T
             reads {}
+        // monoid is associative 
         predicate isAssociative()
         {
             forall x, y, z :: op(op(x, y), z) == op(x, op(y, z))
         }
-
+        // neutral element properties
         predicate hasIdentity()
         {
             forall x :: op(identity(), x) == x && op(x, identity()) == x
         }
-
-        predicate identityIdempotent()
-        {
-            identity() == op(identity(), identity())
-        }
-
+        // we would normally use both in requirements
         predicate validMonoid()
         {
             isAssociative() &&
-            hasIdentity() &&
-            identityIdempotent()
+            hasIdentity()
         }
     } 
-
+    // monoid on integers with + operation
     class AddMonoid extends AbstractMonoid<int> {
         function method op(x: int, y: int): int
         {
             x + y
         }
+        
         function method identity(): int
-        reads {}
+            reads {}
         {
             0
         }
 
-        lemma valid()
-        ensures validMonoid()
-        {
-        }
         constructor() {
         }
     }
+    // normally it is hard to define "the biggest integer", so we will create a type for constant 100
     function method inf(): int {
         100
     }
     type BoundedInt = x: int | x <= inf()
+    // on bounded integers, we can define monoid with min operation
     class MinMonoid extends AbstractMonoid<BoundedInt> {
         function method op(x: BoundedInt, y: BoundedInt): BoundedInt
         {
@@ -55,14 +52,9 @@ module Monoid {
         }
         
         function method identity(): BoundedInt
-        reads {}
+            reads {}
         {
-        inf()
-        }
-
-        lemma valid()
-            ensures validMonoid()
-        {
+            inf()
         }
 
         constructor() {
@@ -70,10 +62,14 @@ module Monoid {
     }
 }
 
+// functional style tree on segments
 datatype SegmentTree<T> =
     Leaf(m: int, value: T)
     | Node(l: int, m: int, r: int, left: SegmentTree, right: SegmentTree, value: T)
 
+// predicate for validity of segments inside a segment tree. Defined recursively:
+// If leaf, it is valid. Otherwise, children should be valid and match boundaries of original segment.
+// Also their segments should be tangent at (m, m + 1)
 predicate validTree(st: SegmentTree)
     decreases st
 {
@@ -81,26 +77,28 @@ predicate validTree(st: SegmentTree)
     {
         case Leaf(_, _) =>
             true
-
+        
         case Node(ll, mm, rr, left, right, _) =>
             ll <= mm < rr
             && validTree(left)
             && validTree(right)
             && (match left {
-                case Leaf(x, _) =>
-                    x == ll && x == mm
-                case Node(l2, m2, r2, _, _, _) =>
-                    l2 == ll && r2 == mm
+                    case Leaf(x, _) =>
+                        x == ll && x == mm
+                    case Node(l2, m2, r2, _, _, _) =>
+                        l2 == ll && r2 == mm
                 })
             && (match right {
-                case Leaf(x, _) =>
-                    x == rr && x == mm + 1
-                case Node(l2, m2, r2, _, _, _) =>
-                    l2 == mm + 1 && r2 == rr
+                    case Leaf(x, _) =>
+                        x == rr && x == mm + 1
+                    case Node(l2, m2, r2, _, _, _) =>
+                        l2 == mm + 1 && r2 == rr
                 })
     }
 }
 
+
+// simple function to extract boundaries of the root for the tree
 function method boundaries(tree: SegmentTree): (int, int)
 {
     match tree {
@@ -109,7 +107,7 @@ function method boundaries(tree: SegmentTree): (int, int)
     }
 }
 
-
+// simple function to extract value of the root for the tree 
 function method getValue<T>(tree: SegmentTree<T>): T
 {
     match tree {
@@ -118,41 +116,89 @@ function method getValue<T>(tree: SegmentTree<T>): T
     }
 }
 
+// function for merging two segment trees at new root, We also need a lambda to calculate value at new root
 function method mergeTrees<T>(left: SegmentTree<T>, right: SegmentTree<T>, merge: (T, T) -> T): (res: SegmentTree<T>)
+    // both trees should have valid structure
     requires validTree(left)
     requires validTree(right)
+    // their root segments should match
     requires boundaries(left).1 + 1 == boundaries(right).0
+    // resulting tree should have valid structure
     ensures validTree(res)
+    // children should be left and right, result cannot be a leaf
     ensures match res {
         case Node(_, _, _, leftRes, rightRes, _) =>
             left == left && right == right
         case Leaf(_, _) => false
     }
+    // root value is correct
     ensures getValue(res) == merge(getValue(left), getValue(right))
 {
     Node(boundaries(left).0, boundaries(left).1, boundaries(right).1, left, right, merge(getValue(left), getValue(right)))
 }
 
-function maxInt(left: int, right: int): int 
+
+// function for calculating maximum of two integers
+function maxInt(left: int, right: int): (res: int) 
+    ensures res >= left && res >= right
+    ensures res == left || res == right
 {
     if left < right then right else left
 }
 
 
-function minInt(left: int, right: int): int 
-{
+
+// function for calculating minimum of two integers
+function minInt(left: int, right: int): (res: int) 
+    ensures res <= left && res <= right
+    ensures res == left || res == right{
     if left > right then right else left
 }
 
+// function which calculates a fold on subarray from l to r using monoid operation
+function straightQuery<T(!new)>(elems: array<T>, l: int, r: int, monoid: Monoid.AbstractMonoid<T>): (res: T) 
+    reads elems
+    // valid bounds for l and r
+    requires 0 <= l && 0 <= r < elems.Length
+    // we return neutral if fold is empty
+    requires monoid.hasIdentity()
+    // two corner cases
+    ensures r < l ==> res == monoid.identity()
+    ensures r == l ==> res == elems[l]
+    decreases r - l
+{
+    if l > r then monoid.identity() else monoid.op(elems[l], straightQuery(elems, l + 1, r, monoid))
+}
+
+// lemma: fold on tangent segments is fold on their union for associative opration
+lemma associativeQuery<T(!new)>(arr: array<T>, l: int, m: int, r: int, monoid: Monoid.AbstractMonoid<T>) 
+    // we will use only for these l, m, r
+    requires 0 <= l <= m <= r < arr.Length
+    requires monoid.validMonoid()
+    ensures straightQuery(arr, l, r, monoid) == monoid.op(straightQuery(arr, l, m, monoid), straightQuery(arr, m + 1, r, monoid))
+    decreases r - l
+{
+    if (r == m) {
+        return;
+    }
+    assert straightQuery(arr, l, r, monoid) == monoid.op(straightQuery(arr, l, m, monoid), straightQuery(arr, m + 1, r, monoid));
+}
+
+// check that values in segment tree correspond to the actual folds on subarrays
 predicate validTreeValues<T(!new)>(tree: SegmentTree<T>, arr: array<T>, monoid: Monoid.AbstractMonoid<T>)
     reads arr
+    // monoid should be valid
     requires monoid.validMonoid()
+    // tree should lie inside allowed segment
     requires 0 <= boundaries(tree).0 <= boundaries(tree).1 < arr.Length
+    // tree should be valid
     requires validTree(tree)
 {
     var (l, r) := boundaries(tree);
     match tree {
+        // if leaf, fold is just element value
         case Leaf(l, val) => arr[l] == val
+        // otherwise children should be ok and root value should be ok
         case Node(l, m, r, left, right, val) => 
             validTreeValues(left, arr, monoid) && 
             validTreeValues(right, arr, monoid) &&
@@ -160,53 +206,42 @@ predicate validTreeValues<T(!new)>(tree: SegmentTree<T>, arr: array<T>, monoid: 
     }
 }
 
+// function that returns a valid segment tree with valid  values on subarray l, r of array using monoid operation
 function method buildTree<T(!new)>(arr: array<T>, l: int, r: int, monoid: Monoid.AbstractMonoid<T>): (res: SegmentTree<T>)
     reads arr
+    // valid subarray
     requires 0 <= l <= r < arr.Length
+    // without associativity it is just incorrect
     requires monoid.validMonoid()
+    // correct root value and boundaries
     ensures boundaries(res) == (l, r)
     ensures getValue(res) == straightQuery(arr, l, r, monoid)
+    // correct structure and correct values in all tree
     ensures validTree(res)
     ensures validTreeValues(res, arr, monoid)
     decreases r - l
 {
     if l == r 
-    then Leaf(l, arr[l]) 
-    else (associativeQuery(arr, l, ((l + r) / 2), r, monoid); 
-    mergeTrees(
-        buildTree(arr, l, (l + r) / 2, monoid), 
-        buildTree(arr, (l + r) / 2 + 1, r, monoid), monoid.op))
+    then 
+        Leaf(l, arr[l]) 
+    else 
+        // apply lemma to get that the value in root  is correct
+        (associativeQuery(arr, l, ((l + r) / 2), r, monoid); 
+        // build trees recursively using merge
+        mergeTrees(
+            buildTree(arr, l, (l + r) / 2, monoid), 
+            buildTree(arr, (l + r) / 2 + 1, r, monoid), monoid.op)
+        )
 }
-
-function straightQuery<T(!new)>(elems: array<T>, l: int, r: int, monoid: Monoid.AbstractMonoid<T>): (res: T) 
-    reads elems
-    requires 0 <= l <= elems.Length && 0 <= r < elems.Length
-    requires monoid.hasIdentity()
-    ensures r == l ==> res == elems[l]
-    ensures r < l ==> res == monoid.identity()
-    decreases r - l
-{
-    if l > r then monoid.identity() else monoid.op(elems[l], straightQuery(elems, l + 1, r, monoid))
-}
-
-lemma associativeQuery<T(!new)>(elems: array<T>, l: int, m: int, r: int, monoid: Monoid.AbstractMonoid<T>) 
-    requires 0 <= l <= m <= r < elems.Length
-    requires monoid.validMonoid()
-    ensures straightQuery(elems, l, r, monoid) == monoid.op(straightQuery(elems, l, m, monoid), straightQuery(elems, m + 1, r, monoid))
-    decreases r - l
-{
-    if (r == m) {
-        assert straightQuery(elems, l, r, monoid) == monoid.op(straightQuery(elems, l, m, monoid), straightQuery(elems, m + 1, r, monoid));
-        return;
-    }
-    assert straightQuery(elems, l, r, monoid) == monoid.op(straightQuery(elems, l, m, monoid), straightQuery(elems, m + 1, r, monoid));
-}
-
     
+// lemma: for a tree with correct structure and correct values in children 
+// value in root is combined value in children
 lemma validTreeValuesRange<T(!new)>(tree: SegmentTree<T>, arr: array<T>, monoid: Monoid.AbstractMonoid<T>)
-    requires 0 <= boundaries(tree).0  < arr.Length
-    requires 0 <= boundaries(tree).1  < arr.Length
+    // correct boundaries for the tree
+    requires 0 <= boundaries(tree).0 <= boundaries(tree).1 < arr.Length
+    // monoid needs to be correct
     requires monoid.validMonoid()
+    // valid tree and values in the tree
     requires validTree(tree)
     requires validTreeValues(tree, arr, monoid)
     decreases boundaries(tree).1 - boundaries(tree).0
@@ -217,44 +252,44 @@ lemma validTreeValuesRange<T(!new)>(tree: SegmentTree<T>, arr: array<T>, monoid:
     }
 {
     match tree {
-        case Leaf(x, val) => assert true;
+        case Leaf(x, val) => assert validTreeValues(tree, arr, monoid);
         case Node(l, m, r, left, right, val) => 
+            // if it is correct for left and right, and monoid is associative, we get the result
             validTreeValuesRange(left, arr, monoid);
-            assert getValue(left) == straightQuery(arr, boundaries(left).0, boundaries(left).1, monoid);
             validTreeValuesRange(right, arr, monoid);
-            assert getValue(right) == straightQuery(arr, boundaries(right).0, boundaries(right).1, monoid);
             associativeQuery(arr, l, m, r, monoid);
-            assert monoid.op(getValue(left), getValue(right)) == val;
     }
 }
 
+// lemma: if we want to calulate fold for intersection of the segments, we can split one of them at point m,
+// then just combine values of two results new subsegment - other segment
 lemma splitSegmentQuery<T(!new)>(arr: array<T>, l: int, m: int, r: int, l1: int, r1: int, monoid: Monoid.AbstractMonoid<T>) 
+    // need associativity
     requires monoid.validMonoid()
+    // need valid boundaries
     requires 0 <= l <= m <= r < arr.Length
     requires 0 <= l1 <= r1 < arr.Length
     ensures straightQuery(arr, maxInt(l, l1), minInt(r, r1), monoid) == 
         monoid.op(straightQuery(arr, maxInt(l, l1), minInt(m, r1), monoid), straightQuery(arr, maxInt(m + 1, l1), minInt(r, r1), monoid))
 {
+    // one of subsegments has empty intersection
     if m < l1 {
-        assert straightQuery(arr, maxInt(m + 1, l1), minInt(r, r1), monoid) == straightQuery(arr, l1, minInt(r, r1), monoid);
-        assert straightQuery(arr, maxInt(l, l1), minInt(m, r1), monoid) == straightQuery(arr, l1, m, monoid) == monoid.identity();
-        assert straightQuery(arr, l1, minInt(r, r1), monoid) == monoid.op(straightQuery(arr, maxInt(l, l1), minInt(m, r1), monoid), straightQuery(arr, maxInt(m + 1, l1), minInt(r, r1), monoid));
-        assert straightQuery(arr, maxInt(l, l1), minInt(r, r1), monoid) == 
-            monoid.op(straightQuery(arr, maxInt(l, l1), minInt(m, r1), monoid), straightQuery(arr, maxInt(m + 1, l1), minInt(r, r1), monoid));
         return;
     }
     if (m > r1) {
-        assert straightQuery(arr, maxInt(l, l1), minInt(r, r1), monoid) == 
-        monoid.op(straightQuery(arr, maxInt(l, l1), minInt(m, r1), monoid), straightQuery(arr, maxInt(m + 1, l1), minInt(r, r1), monoid));
         return;
     }
+    // otherwise result is just special case for associative lemma
     associativeQuery(arr, maxInt(l1, l), m, minInt(r1, r), monoid);
 }
 
+// lemma: for folds on subarray l,r on two arrays whose only difference is not inside [l, r], their results are the same (under one monoid) 
 lemma almostEqualQueries<T(!new)>(arr1: array<T>, arr2: array<T>, l: int, r: int, pos: int, monoid: Monoid.AbstractMonoid<T>) 
+    // arrays have same size and differ in at most one postion, which is outside [l, r] 
     requires arr1.Length == arr2.Length
     requires monoid.validMonoid()
     requires forall i :: 0 <= i < arr1.Length && i != pos ==> arr1[i] == arr2[i]
+    // valid fold boundaries
     requires 0 <= l <= arr1.Length
     requires 0 <= r < arr1.Length
     requires pos < l || pos > r
@@ -264,22 +299,30 @@ lemma almostEqualQueries<T(!new)>(arr1: array<T>, arr2: array<T>, l: int, r: int
     if (r < l) {
         return;
     }
+    // recursive proof
     almostEqualQueries(arr1, arr2, l + 1, r, pos, monoid);
 }
 
+// lemma: if tree is valid by structure and values on some segment for array arr1, 
+// and array arr2 differs in at most in one position from arr1 which is ouside of the tree,
+// then tree is a valid tree for arr2
 lemma almostEqualTrees<T(!new)>(tree: SegmentTree<T>, arr1: array<T>, arr2: array<T>, pos: int, monoid: Monoid.AbstractMonoid<T>) 
-    requires arr1.Length == arr2.Length
+    // valid tree for arr by structure and values
     requires validTree(tree)
-    requires monoid.validMonoid()
-    requires forall i :: 0 <= i < arr1.Length && pos != i ==> arr1[i] == arr2[i]
     requires 0 <= boundaries(tree).0 <= boundaries(tree).1 < arr1.Length
+    requires monoid.validMonoid()
     requires validTreeValues(tree, arr1, monoid)
+    // arr1 and arr2 differs in at most one position
+    requires arr1.Length == arr2.Length
+    requires forall i :: 0 <= i < arr1.Length && pos != i ==> arr1[i] == arr2[i]
+    // which is outside of the tree
     requires pos > boundaries(tree).1 || pos < boundaries(tree).0
     ensures validTreeValues(tree, arr2, monoid)
 {
     match tree {
         case Leaf(x, val) => assert arr1[x] == arr2[x];
         case Node(l, m, r, left, right, val) => 
+            // use induction and almost equal query lemma
             almostEqualTrees(left, arr1, arr2, pos, monoid);
             almostEqualTrees(right, arr1, arr2, pos, monoid);
             almostEqualQueries(arr1, arr2, l, r, pos, monoid);
@@ -287,27 +330,35 @@ lemma almostEqualTrees<T(!new)>(tree: SegmentTree<T>, arr1: array<T>, arr2: arra
     }
 }
 
+// function that by valid (structure and value) tree for arr1 returns a valid tree for arr2, 
+// knowing that arr1 and arr2 differ in at most one position
 function method rebuildTree<T(!new)>(tree: SegmentTree<T>, arr1: array<T>, arr2: array<T>, pos: int, monoid: Monoid.AbstractMonoid<T>): (res: SegmentTree<T>)
     reads arr2
     reads arr1
+    // differ in at most one position
     requires arr1.Length == arr2.Length
+    requires forall i :: 0 <= i < arr1.Length && i != pos ==> arr1[i] == arr2[i]
+    // valid tree by structure and values
     requires validTree(tree)
     requires monoid.validMonoid()
-    requires forall i :: 0 <= i < arr1.Length && i != pos ==> arr1[i] == arr2[i]
     requires 0 <= boundaries(tree).0 <= boundaries(tree).1 < arr1.Length
     requires validTreeValues(tree, arr1, monoid)
+    // valid tree by structure and values on arr2
     ensures boundaries(res) == boundaries(tree)
     ensures validTree(res)
     ensures validTreeValues(res, arr2, monoid)
 {
     if (pos < boundaries(tree).0 || pos > boundaries(tree).1) 
     then
+        // if position is outside of the tree, by lemma tree itself works
         almostEqualTrees(tree, arr1, arr2, pos, monoid);
         tree
     else
         match tree {
+            // corner case: return another leaf with fixed value
             case Leaf(x, val) => assert pos == x; Leaf(x, arr2[x])
             case Node(l, m, r, left, right, val) => 
+                // one of the segments [l, m], [m + 1, r] won't contain position, and the other will be fixed by recursion
                 if (m < pos) 
                 then
                     almostEqualTrees(left, arr1, arr2, pos, monoid);
@@ -320,20 +371,24 @@ function method rebuildTree<T(!new)>(tree: SegmentTree<T>, arr1: array<T>, arr2:
         }
 }
 
+// by array, position and value returns an array with value at position and equal other elements
 method singleChange<T>(arr: array<T>, pos: int, elem: T) returns (res: array<T>)
     requires 0 <= pos < arr.Length 
     ensures arr.Length == res.Length
     ensures res[pos] == elem
     ensures forall i :: 0 <= i < arr.Length && (i != pos) ==> arr[i] == res[i]
 {
+    // create array of values
     var newArr := new T[arr.Length](_ => elem);
     var i := 0;
+    // "fix" the array by copying elements from original array, skipping the input position
     while i < arr.Length
+        // natural loop invariants
         invariant 0 <= i <= arr.Length
-        invariant arr.Length == newArr.Length
         invariant elem == newArr[pos]
         invariant forall j :: 0 <= j < i && (j != pos) ==> arr[j] == newArr[j]
     {
+        // skip input position or copy element from original array
         if (i != pos) {
             newArr[i] := arr[i];
         }
@@ -348,6 +403,8 @@ class SegmentTreeWrapper<T(!new)>
     var tree: SegmentTree<T>
     var monoid: Monoid.AbstractMonoid<T>
 
+    // predicate for valid subtree inside wrapper.
+    // we need: structure, values, valid boundaries, valid monoid
     predicate validSubtree(subTree: SegmentTree<T>)
         reads this
         reads elems
@@ -355,6 +412,7 @@ class SegmentTreeWrapper<T(!new)>
         monoid.validMonoid() && validTree(subTree) && boundaries(subTree).0 >= 0 && boundaries(subTree).1 < elems.Length && validTreeValues(subTree, elems, monoid)
     }
 
+    // whether tree field covers entire array
     predicate fullTree() 
         reads this
     {
@@ -371,79 +429,100 @@ class SegmentTreeWrapper<T(!new)>
     {
         elems := arr;
         monoid := m;
+        // construct valid by structure and values tree from an input array
         tree := buildTree(arr, 0, arr.Length - 1, m);
     }
 
+    // by tree valid tree on elems field returns fold of intersection of input segment with tree
     function method innerQuery(subTree:SegmentTree<T>, l: int, r: int): (res: T)
         reads elems
         reads this
+        // valid subsegment and valid tree by structure and values
         requires validSubtree(subTree)
         requires 0 <= l <= r < elems.Length
         requires 0 <= boundaries(subTree).0 < elems.Length
         requires 0 <= boundaries(subTree).1 < elems.Length
+        // intersection of two segments
         ensures res == straightQuery(elems, maxInt(boundaries(subTree).0, l), minInt(boundaries(subTree).1, r), monoid)
         decreases subTree
     {
         var (leftPoint, rightPoint) := boundaries(subTree);
         if (r < leftPoint || l > rightPoint) 
-        then assert monoid.identity() == straightQuery(elems, maxInt(leftPoint, l), minInt(rightPoint, r), monoid); monoid.identity()
+        then
+            // no intersection - no fold 
+            assert monoid.identity() == straightQuery(elems, maxInt(leftPoint, l), minInt(rightPoint, r), monoid); 
+            monoid.identity()
         else if (l <= leftPoint <= rightPoint <= r) 
-            then 
-            assert straightQuery(elems, maxInt(l, leftPoint), minInt(r, rightPoint), monoid) == 
-                straightQuery(elems, leftPoint, rightPoint, monoid);
-            getValue(subTree)
+            then
+                //full intersection - value in root 
+                assert straightQuery(elems, maxInt(l, leftPoint), minInt(r, rightPoint), monoid) == 
+                    straightQuery(elems, leftPoint, rightPoint, monoid);
+                getValue(subTree)
             else match subTree {
                 case Node(leftPoint, m, rightPoint, left, right, value) =>
+                // otherwise answer is combination of answers of children
                     splitSegmentQuery(elems, leftPoint, m, rightPoint, l, r, monoid);
                     assert straightQuery(elems, maxInt(l, leftPoint), minInt(r, rightPoint), monoid) == 
-                        monoid.op(straightQuery(elems, maxInt(leftPoint, l), minInt(m, r), monoid), straightQuery(elems, maxInt(m + 1, l), minInt(rightPoint, r), monoid));
+                        monoid.op(
+                            straightQuery(elems, maxInt(leftPoint, l), minInt(m, r), monoid), 
+                            straightQuery(elems, maxInt(m + 1, l), minInt(rightPoint, r), monoid)
+                        );
                     monoid.op(innerQuery(left, l, r), innerQuery(right, l, r))
+                // just leaf value in corner case
                 case Leaf(_, val) => assert leftPoint == rightPoint; val
             }
     }
 
+    // public method for user usage
     method query(l: int, r: int) returns (res: T)
+        // valid boundaries
         requires 0 <= l < elems.Length
         requires 0 <= r < elems.Length
+        // valid by structure and values tree covering entire segment
         requires validSubtree(tree)
         requires fullTree()
+        // answer is expected
         ensures res == straightQuery(elems, l, r, monoid)
     {
         if (l > r) {
             return monoid.identity();
         }
-        assert boundaries(tree) == (0, elems.Length - 1);
         return innerQuery(tree, l, r);
     }
 
+    // public method for an element update
     method change(pos: int, elem: T)
         modifies this
+        // valid by structure and values tree covering entrire array
         requires monoid.validMonoid()
         requires validTree(tree)
         requires validSubtree(tree)
         requires fullTree()
+        // valid position
         requires 0 <= pos < elems.Length
+        // key invariants kept
         ensures monoid.validMonoid()
         ensures validTree(tree)
         ensures validSubtree(tree)
         ensures fullTree()
+        // elems almost equal to old elems, all but one are the same and input position contains new value
         ensures elems.Length == old(elems.Length) 
         ensures elems[pos] == elem
         ensures forall i :: 0 < i < elems.Length && (i != pos) ==> elems[i] == old(elems[i])
     {
+        // update elems without modifying elems by index
         var newElems := singleChange(elems, pos, elem);
+        // update tree by fixing malformed subtrees
         var newTree := rebuildTree(tree, elems, newElems, pos, monoid);
         elems := newElems;
         tree := newTree;       
     }
-    
 }
 
 method Main() {
+    // monoid examples
     var addMonoidInstance := new Monoid.AddMonoid();
     var minMonoidInstance := new Monoid.MinMonoid();
-    var minMonoidSt := new Monoid.MinMonoid();
-    assert minMonoidSt.validMonoid();
     print addMonoidInstance.op(3, 13), " ";
     print addMonoidInstance.identity(), " ";
     print minMonoidInstance.op(3, 13), " ";
@@ -474,7 +553,7 @@ method Main() {
     var newAddRes24 := segmentTreeAdd.query(2, 4);
     print "add result on 2-4 after change: ", newAddRes24, "\n";
     assert arr[3] == 1;
-    var segmentTreeMin := new SegmentTreeWrapper<Monoid.BoundedInt>(minArr, minMonoidInstance);  
+    var segmentTreeMin := new SegmentTreeWrapper<Monoid.BoundedInt>(minArr, minMonoidInstance);
     assert segmentTreeMin.elems.Length == 7;
     var minRes35 := segmentTreeMin.query(3, 5);
     print "min result on 3-5: ", minRes35, "\n";
