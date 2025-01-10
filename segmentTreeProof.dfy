@@ -116,6 +116,16 @@ function method getValue<T>(tree: SegmentTree<T>): T
     }
 }
 
+function method treeHeight<T>(tree: SegmentTree<T>): (res: int)
+    requires validTree(tree)
+    ensures res >= 0
+{
+    match tree {
+        case Leaf(_, _) => 0
+        case Node(_, _, _, left, right, _) => maxInt(treeHeight(left), treeHeight(right)) + 1
+    }
+}
+
 // function for merging two segment trees at new root, We also need a lambda to calculate value at new root
 function method mergeTrees<T>(left: SegmentTree<T>, right: SegmentTree<T>, merge: (T, T) -> T): (res: SegmentTree<T>)
     // both trees should have valid structure
@@ -133,13 +143,14 @@ function method mergeTrees<T>(left: SegmentTree<T>, right: SegmentTree<T>, merge
     }
     // root value is correct
     ensures getValue(res) == merge(getValue(left), getValue(right))
+    ensures treeHeight(res) == maxInt(treeHeight(left), treeHeight(right)) + 1;
 {
     Node(boundaries(left).0, boundaries(left).1, boundaries(right).1, left, right, merge(getValue(left), getValue(right)))
 }
 
 
 // function for calculating maximum of two integers
-function maxInt(left: int, right: int): (res: int) 
+function method maxInt(left: int, right: int): (res: int) 
     ensures res >= left && res >= right
     ensures res == left || res == right
 {
@@ -149,7 +160,7 @@ function maxInt(left: int, right: int): (res: int)
 
 
 // function for calculating minimum of two integers
-function minInt(left: int, right: int): (res: int) 
+function method minInt(left: int, right: int): (res: int) 
     ensures res <= left && res <= right
     ensures res == left || res == right{
     if left > right then right else left
@@ -219,15 +230,19 @@ function method buildTree<T(!new)>(arr: array<T>, l: int, r: int, monoid: Monoid
     // correct structure and correct values in all tree
     ensures validTree(res)
     ensures validTreeValues(res, arr, monoid)
+    ensures balancedTree(res)
     decreases r - l
 {
     if l == r 
     then 
+        assert 2 * (r - l + 1) > 1;
         Leaf(l, arr[l]) 
     else 
         // apply lemma to get that the value in root  is correct
         (associativeQuery(arr, l, ((l + r) / 2), r, monoid); 
         // build trees recursively using merge
+        assert 2 * ((r + l) / 2 - l + 1) > powerTwo(treeHeight(buildTree(arr, l, (l + r) / 2, monoid)));
+        assert 2 * (r - (r + l) / 2) > powerTwo(treeHeight(buildTree(arr, (l + r) / 2 + 1, r, monoid)));
         mergeTrees(
             buildTree(arr, l, (l + r) / 2, monoid), 
             buildTree(arr, (l + r) / 2 + 1, r, monoid), monoid.op)
@@ -330,9 +345,51 @@ lemma almostEqualTrees<T(!new)>(tree: SegmentTree<T>, arr1: array<T>, arr2: arra
     }
 }
 
+function method powerTwo(x: int): (res: int)
+    requires x >= 0
+    ensures res >= 1
+{
+    if x == 0 
+    then
+        1
+    else 2 * powerTwo(x - 1) 
+}
+
+predicate equalStructures<T>(tree1: SegmentTree<T>, tree2: SegmentTree<T>) 
+    requires validTree(tree1)
+    requires validTree(tree2)
+{
+    match tree1 {
+        case Leaf(x, _) =>
+            match tree2 {
+                case Leaf(y, _) => x == y
+                case Node(_, _, _, _, _, _) => false
+            }
+        case Node(l, m, r, left, right, _) =>
+            match tree2 {
+                case Leaf(_, _) => false
+                case Node(l1, m1, r1, left1, right1, _) => l1 == l && m1 == m && r1 == r && equalStructures(left, left1) && equalStructures(right, right1)
+            }
+    }
+}
+
+lemma equalTreeStructures<T>(tree: SegmentTree<T>) 
+    requires validTree(tree)
+    ensures equalStructures(tree, tree)
+{
+}
+
+lemma equalStructuresProperties<T>(tree1: SegmentTree<T>, tree2: SegmentTree<T>) 
+    requires validTree(tree1)
+    requires validTree(tree2)
+    requires equalStructures(tree1, tree2)
+    ensures treeHeight(tree1) == treeHeight(tree2)
+    ensures balancedTree(tree1) <==> balancedTree(tree2)
+{
+}
 // function that by valid (structure and value) tree for arr1 returns a valid tree for arr2, 
 // knowing that arr1 and arr2 differ in at most one position
-function method rebuildTree<T(!new)>(tree: SegmentTree<T>, arr1: array<T>, arr2: array<T>, pos: int, monoid: Monoid.AbstractMonoid<T>): (res: SegmentTree<T>)
+function method rebuildTree<T(!new)>(tree: SegmentTree<T>, arr1: array<T>, arr2: array<T>, pos: int, monoid: Monoid.AbstractMonoid<T>): (res: (SegmentTree<T>, int))
     reads arr2
     reads arr1
     // differ in at most one position
@@ -343,31 +400,48 @@ function method rebuildTree<T(!new)>(tree: SegmentTree<T>, arr1: array<T>, arr2:
     requires monoid.validMonoid()
     requires 0 <= boundaries(tree).0 <= boundaries(tree).1 < arr1.Length
     requires validTreeValues(tree, arr1, monoid)
+    requires balancedTree(tree)
     // valid tree by structure and values on arr2
-    ensures boundaries(res) == boundaries(tree)
-    ensures validTree(res)
-    ensures validTreeValues(res, arr2, monoid)
+    ensures boundaries(res.0) == boundaries(tree)
+    ensures validTree(res.0)
+    ensures validTreeValues(res.0, arr2, monoid)
+    ensures equalStructures(tree, res.0)
+    ensures balancedTree(res.0)
+    ensures 2 * treeHeight(res.0) + 1 >= res.1
+    ensures res.1 >= 0
 {
     if (pos < boundaries(tree).0 || pos > boundaries(tree).1) 
     then
         // if position is outside of the tree, by lemma tree itself works
         almostEqualTrees(tree, arr1, arr2, pos, monoid);
-        tree
+        equalTreeStructures(tree);
+        equalStructuresProperties(tree, tree);
+        (tree, 1)
     else
         match tree {
             // corner case: return another leaf with fixed value
-            case Leaf(x, val) => assert pos == x; Leaf(x, arr2[x])
+            case Leaf(x, val) => assert pos == x; (Leaf(x, arr2[x]), 1)
             case Node(l, m, r, left, right, val) => 
                 // one of the segments [l, m], [m + 1, r] won't contain position, and the other will be fixed by recursion
                 if (m < pos) 
                 then
                     almostEqualTrees(left, arr1, arr2, pos, monoid);
                     associativeQuery(arr2, l, m, r, monoid);
-                    mergeTrees(left, rebuildTree(right, arr1, arr2, pos, monoid), monoid.op)
+                    var prevResult := rebuildTree(right, arr1, arr2, pos, monoid);
+                    assert equalStructures(right, prevResult.0);
+                    equalTreeStructures(left);
+                    assert equalStructures(left, left);
+                    equalStructuresProperties(tree, mergeTrees(left, prevResult.0, monoid.op));
+                    (mergeTrees(left, prevResult.0, monoid.op), prevResult.1 + 1)
                 else
                     almostEqualTrees(right, arr1, arr2, pos, monoid);
                     associativeQuery(arr2, l, m, r, monoid);
-                    mergeTrees(rebuildTree(left, arr1, arr2, pos, monoid), right, monoid.op)
+                    var prevResult := rebuildTree(left, arr1, arr2, pos, monoid);
+                    assert equalStructures(left, prevResult.0);
+                    equalTreeStructures(right);
+                    assert equalStructures(right, right);
+                    equalStructuresProperties(tree, mergeTrees(prevResult.0, right, monoid.op));
+                    (mergeTrees(prevResult.0, right, monoid.op), prevResult.1 + 1)
         }
 }
 
@@ -395,6 +469,23 @@ method singleChange<T>(arr: array<T>, pos: int, elem: T) returns (res: array<T>)
         i := i + 1;
     }
     return newArr;
+}
+
+// predicate to check that tree is close to balanced, i.e. it's height is bounded by logn
+predicate balancedTree<T>(tree: SegmentTree<T>) 
+    requires validTree(tree)
+{
+    powerTwo(treeHeight(tree)) < 2 * (boundaries(tree).1 - boundaries(tree).0 + 1) && 
+    match tree {
+        case Leaf(_, _) => true
+        case Node(_, _, _, left, right, _) => balancedTree(left) && balancedTree(right)
+    }
+}
+
+lemma nondecreasingPowerTwo(x: int, y: int) 
+    requires x >= y >= 0
+    ensures powerTwo(x) >= powerTwo(y)
+{
 }
 
 class SegmentTreeWrapper<T(!new)>
@@ -426,6 +517,7 @@ class SegmentTreeWrapper<T(!new)>
         ensures elems.Length == arr.Length == elems.Length
         ensures validSubtree(tree)
         ensures fullTree()
+        ensures balancedTree(tree)
     {
         elems := arr;
         monoid := m;
@@ -498,6 +590,7 @@ class SegmentTreeWrapper<T(!new)>
         requires validTree(tree)
         requires validSubtree(tree)
         requires fullTree()
+        requires balancedTree(tree)
         // valid position
         requires 0 <= pos < elems.Length
         // key invariants kept
@@ -505,6 +598,7 @@ class SegmentTreeWrapper<T(!new)>
         ensures validTree(tree)
         ensures validSubtree(tree)
         ensures fullTree()
+        ensures balancedTree(tree)
         // elems almost equal to old elems, all but one are the same and input position contains new value
         ensures elems.Length == old(elems.Length) 
         ensures elems[pos] == elem
@@ -515,7 +609,12 @@ class SegmentTreeWrapper<T(!new)>
         // update tree by fixing malformed subtrees
         var newTree := rebuildTree(tree, elems, newElems, pos, monoid);
         elems := newElems;
-        tree := newTree;       
+        tree := newTree.0;
+        var recursionCalls := newTree.1;
+        assert recursionCalls <= 2 * treeHeight(tree) + 1;
+        assert powerTwo(treeHeight(tree)) < 2 * elems.Length;
+        nondecreasingPowerTwo(treeHeight(tree), (recursionCalls - 1) / 2);
+        assert powerTwo((recursionCalls - 1) / 2) < 2 * elems.Length;       
     }
 }
 
@@ -528,7 +627,7 @@ method Main() {
     print minMonoidInstance.op(3, 13), " ";
     print minMonoidInstance.identity(), " ";
     assert addMonoidInstance.validMonoid();
-    print "Our testing array for segment tree: 3, 1, 4, 1, 5, 9, 2";
+    print "Our testing array for segment tree: 3, 1, 4, 1, 5, 9, 2\n";
     var arr := new int[7];
     arr[0] := 3;
     arr[1] := 1;
